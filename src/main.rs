@@ -1,241 +1,180 @@
-use std::thread;
+/*
+* Author: Anastasios Temperekidis
+*
+* An Asynchronous message-passing distributed algorithm 
+* for N-CS (Mutex) problem with channels in Rust
+*
+*/
+
+
+extern crate piston_window;
+
+use std::{thread,time};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Condvar};
-
+use piston_window::*;
 
 fn main() {
-    let n = 2;
-    let m = 1;
+
+    let n = 30; //Number of nodes
+    let m = 2; //How many nodes can be in their critical section
     let (tx, rx) = mpsc::channel();
     let mut shout = Vec::with_capacity(n);
-    //let mut CS = Arc::new(Mutex(Vec::new()));
-    
+    let in_cs = Arc::new(Mutex::new(vec![[1.0, 0.0, 0.0, 1.0]; n])); // For GUI
+
+
+    /* The thread below is for visualizing the state of the system */
+    let graph_cs = in_cs.clone();
+    thread::spawn (move || {
+
+        let mut window: PistonWindow =
+        WindowSettings::new("Hello World!", [512; 2])
+            .build().unwrap();
+
+        while let Some(e) = window.next() {
+        window.draw_2d(&e, |c, g| {
+            let mut x = 0.0;
+            let mut k = -110.0;
+            clear([0.0, 0.0, 0.0, 0.0], g);
+            
+            for i in 0..n {
+             
+             if i%10 ==0 {
+                 k+= 111.0;
+                 x= 0.0;
+             }
+
+             rectangle((graph_cs.lock().unwrap())[i], // red
+             [110.0*x,k , 90.0, 90.0], // rectangle
+             c.transform, g);
+             x+= 1.0;
+
+            
+            }
+
+        });
+    }    
+    });
+
+    /* Create N threads. Each thread represents one node */    
     for i in 1..=n {
         let (px,zx) = mpsc::channel();
         let thx = mpsc::Sender::clone(&tx);
         shout.push(px);
-        //let tcs = Arc::clone(&CS);
+       
+
+        //Node
+        let update_cs = in_cs.clone();
         thread::spawn(move || {
              
              extern crate rand;
              use rand::Rng;
 
-             let ts = Arc::new(Mutex::new(1));
-             let pid = i;
-             let state = Arc::new(Mutex::new(false));
-             let ngrants = Arc::new((Mutex::new(0),Condvar::new()));
-           //  let in_progress = Arc::new(Mutex::new(false));
-             let next_action = Arc::new(Mutex::new(-1));
-             let granted_to = Arc::new(Mutex::new(Vec::new()));
-             let pending_req = Arc::new(Mutex::new(Vec::new()));
-             let preempting_now = Arc::new(Mutex::new(0));
-            
+             let ts = Arc::new(Mutex::new(1)); //timer
+             let pid = i; //Node's ID
+             let state = Arc::new(Mutex::new(false)); // is in critical section or not?
+             let ngrants = Arc::new((Mutex::new(0),Condvar::new())); //to insert the node in its cs needs N-1 grants from all the other nodes and one grant from itself.
+             let granted_to = Arc::new(Mutex::new(Vec::new())); // a set of timestamps (ts_j,p_j) for the requests to Pj's entering the cs that Pj's has been granted, but that Pj has not yet released.
+             let pending_req = Arc::new(Mutex::new(Vec::new())); // a set of timestamps (ts_j,p_j) for the requests to Pj's entering the cs that are pending.
+             let preempting_now = Arc::new(Mutex::new(0)); // a process id such that Pi (this node) preempts a permission for Pj's entering the CS, if the preemption is in progress.
 
-             /*
-                Exit - Sequence
-             */
+
+             // Message handlers functions are executed in other thread.
              let state1 = Arc::clone(&state);
-             //let in_progress1 = Arc::clone(&in_progress);
+             let ngrants1 = Arc::clone(&ngrants);
+             let granted_to1 = Arc::clone(&granted_to);
+             let pending_req1 = Arc::clone(&pending_req);
+             let preempting_now1 = Arc::clone(&preempting_now);
              let thx1 = mpsc::Sender::clone(&thx);
-             let (tx1,rx1) = mpsc::channel();
-             let (tx1_1,rx1_1) = mpsc::channel();
-             let ts1 = Arc::clone(&ts);
-             //let tcs1 = Arc::clone(&tcs);
-             let _exit_seq_builder = thread::Builder::new().name("ExitSeq".into());
-             let _exit_seq = _exit_seq_builder.spawn(move || {
 
-             for _ in rx1  {
-                    *(ts1.lock().unwrap()) +=1;
-                  
-                    let mut state = state1.lock().unwrap();
-                    
-                    *state = false;
-                    println!("Process {} goes out of CS",pid);
-                    
-                    for i in 1..=n {
-                        thx1.send(("Release",0,pid,i)).unwrap();
-                    }
-                    
-                    //*(in_progress1.lock().unwrap()) = false;
-                    tx1_1.send("ok");
-                }
-             }
+             thread::spawn(move || {
 
-             );
-
-             /*
-                Entry - Sequence
-             */
-
-             let state2 = Arc::clone(&state);
-             //let in_progress2 = Arc::clone(&in_progress);
-             let thx2 = mpsc::Sender::clone(&thx);
-             let ngrants2 = Arc::clone(&ngrants);
-             let (tx2,rx2) = mpsc::channel();
-             let (tx2_1,rx2_1) = mpsc::channel();
-             let ts2 = Arc::clone(&ts);
-             let _entry_seq_builder = thread::Builder::new().name("EntrySeq".into());
-             let _entry_seq = _entry_seq_builder.spawn(move || {
-
-                for _ in rx2  {
-
-                    let &(ref r_ngrants, ref cvar) = &*ngrants2;
-                    
-                    let mut ngrants = r_ngrants.lock().unwrap();
-                    *ngrants = 0;
-
-                    for i in 1..=n {
-                        thx2.send(("Request",*(ts2.lock().unwrap()),pid,i)).unwrap();
-                    }
-
-                     while *ngrants < n {
-                         ngrants = cvar.wait(ngrants).unwrap();
-                         println!("Process {} waits" ,pid);
-                         
-                     }
-                     println!("Process {} stops wait" ,pid);
-                     let mut state = state2.lock().unwrap();
-                     *state = true;
-                     println!("Process {} is in CS!",pid);
-
-                    tx2_1.send("ok");
-                   // *(in_progress2.lock().unwrap()) = false;
-                }
-             }
-
-             );
-
-             /*
-                Receive - Request
-             */
-            
-             
-             let thx3 = mpsc::Sender::clone(&thx);
-             let (tx3,rx3) = mpsc::channel();
-             let (tx3_1,rx3_1) = mpsc::channel();
-             let granted_to_3 = Arc::clone(&granted_to);
-             let pending_req_3 = Arc::clone(&pending_req);
-             let preempting_now_3 = Arc::clone(&preempting_now);
-             let _req_recv_builder = thread::Builder::new().name("Request".into());
-
-             let _req_recv = _req_recv_builder.spawn(move || {
+                 /* Functions for general purpose delete min ,find max.. */
+                 
                 fn delete_min( v: &mut Vec<(i32,usize)>)->(i32,usize){
-                    let mut index = 0;
-                    let mut min = (999999,999999);
-                    let mut i=0;
-                    for t in v.iter() {
-                        
-                        if t.0 < min.0 || (t.0 == min.0 && t.1 < min.1) {
-                            min.0 = t.0;
-                            min.1 = t.1;
-                            index = i;
+                        let mut index = 0;
+                        let mut min = (999999,999999);
+                        let mut i=0;
+                        for t in v.iter() {
+                            
+                            if t.0 < min.0 || (t.0 == min.0 && t.1 < min.1) {
+                                min.0 = t.0;
+                                min.1 = t.1;
+                                index = i;
+                            }
+                            i+=1;
                         }
-                        i+=1;
+                        v.remove(index);
+                        min
                     }
-                    v.remove(index);
-                    min
-                }
 
                 fn max( v: &Vec<(i32,usize)>)->(i32,usize){
-                    
-                    let mut max = (0,0);
-
-                    for t in v.iter() {
                         
-                        if t.0 > max.0 || ((t.0 == max.0) && (t.1 < max.1)) {
-                            max.0 = t.0;
-                            max.1 = t.1;
+                        let mut max = (0,0);
+
+                        for t in v.iter() {
+                            
+                            if t.0 > max.0 || ((t.0 == max.0) && (t.1 < max.1)) {
+                                max.0 = t.0;
+                                max.1 = t.1;
+                            }
                         }
-                    }
-                    
-                    max
+                        
+                        max
                 }
+            
 
-                for (timestamp,from) in rx3  {
-
-                    let mut granted_to = granted_to_3.lock().unwrap();
-                    let mut pending_req = pending_req_3.lock().unwrap();
-                    let mut preempting_now = preempting_now_3.lock().unwrap();
+             /*
+                Receive-Request
+             */
+             
+             let receive_req = |timestamp:i32,from:usize| {
+                    let mut granted_to = granted_to1.lock().unwrap();
+                    let mut pending_req = pending_req1.lock().unwrap();
+                    let mut preempting_now = preempting_now1.lock().unwrap();
                     pending_req.push((timestamp,from));
 
                     if granted_to.len() < m {
                         let (tsh,ph) = delete_min(&mut pending_req);
                         granted_to.push((tsh,ph));
-                        thx3.send(("Grant",0,pid,ph)).unwrap();
+                        thx1.send(("Grant",0,pid,ph)).unwrap();
                     }
                     else if *preempting_now == 0 {
-                       /* let (tsh,ph) = max(&granted_to);
+                        let (tsh,ph) = max(&granted_to);
 
                         if timestamp < tsh || ((tsh == timestamp) && (from < ph) ) {
                             *preempting_now = ph;
-                            thx3.send(("Preempt",0,pid,ph)).unwrap();
+                            thx1.send(("Preempt",0,pid,ph)).unwrap();
                         }
-                        */
+                        
                     }
-                   tx3_1.send("complete");
-                }
-             }
-
-             );
+                
+             };
 
 
              /*
                 Receive-Grant
-
              */
-            
-            let ngrants4 = Arc::clone(&ngrants);
-            let (tx4,rx4) = mpsc::channel();
-            let (tx4_1,rx4_1) = mpsc::channel();
-            let _grant_recv_builder = thread::Builder::new().name("Grant".into());
-            let _grant_recv = _grant_recv_builder.spawn(move || {
-                for _ in rx4 {
 
-                    let &(ref r_ngrants, ref cvar) = &*ngrants4;
+            let grant = || {
+                    let &(ref r_ngrants, ref cvar) = &*ngrants1;
                     let mut ngrants = r_ngrants.lock().unwrap();
                     
                     *ngrants += 1;
                     cvar.notify_one();
-                    tx4_1.send("complete");
                     
-                }
-            });
+            };
+         
 
             /*
                 Receive - Release 
             */
 
-            let thx5 = mpsc::Sender::clone(&thx);
-            let (tx5,rx5) = mpsc::channel();
-            let granted_to_5 = Arc::clone(&granted_to);
-            let pending_req_5 = Arc::clone(&pending_req);
-            let preempting_now_5 = Arc::clone(&preempting_now);
-            let (tx5_1,rx5_1) = mpsc::channel();
-            let _rel_recv_builder = thread::Builder::new().name("Release".into());
-            let _rel_recv = _rel_recv_builder.spawn(move || {
+            let release = |from:usize| {
 
-                 fn delete_min( v: &mut Vec<(i32,usize)>)->(i32,usize){
-                    let mut index = 0;
-                    let mut min = (999999,999999);
-                    let mut i=0;
-                    for t in v.iter() {
-                        
-                        if t.0 < min.0 || (t.0 == min.0 && t.1 < min.1) {
-                            min.0 = t.0;
-                            min.1 = t.1;
-                            index = i;
-                        }
-                        i+=1;
-                    }
-                    v.remove(index);
-                    min
-                }
-
-                for (_timestamp,from) in rx5  {
-
-                    let mut granted_to = granted_to_5.lock().unwrap();
-                    let mut pending_req = pending_req_5.lock().unwrap();
-                    let mut preempting_now = preempting_now_5.lock().unwrap();
+                    let mut granted_to = granted_to1.lock().unwrap();
+                    let mut pending_req = pending_req1.lock().unwrap();
+                    let mut preempting_now = preempting_now1.lock().unwrap();
                     
                     if *preempting_now == from {
                         *preempting_now = 0;
@@ -255,93 +194,53 @@ fn main() {
 
                         let (tsh,ph) = delete_min(&mut pending_req);
                         granted_to.push((tsh,ph));
-                        thx5.send(("Grant",0,pid,ph)).unwrap();
+                        thx1.send(("Grant",0,pid,ph)).unwrap();
                     }
 
-                    tx5_1.send("complete");
-                }
-
-            });
+              };
 
 
              /*
                    Receive - Preempt
              */
 
-            let thx6 = mpsc::Sender::clone(&thx);
-            let (tx6,rx6) = mpsc::channel();
-            let state6 = Arc::clone(&state);
-            let ngrants6 = Arc::clone(&ngrants);
-            let (tx6_1,rx6_1) = mpsc::channel();
-            let _preempt_recv_builder = thread::Builder::new().name("Preempt".into());
-            let _preempt_recv = _preempt_recv_builder.spawn(move || {
-
-                for (_,from) in rx6 {
+            let preempt = |from:usize| {
                    
-                    let state = state6.lock().unwrap();
-                    let &(ref r_ngrants, ref cvar) = &*ngrants6;
+                    let state = state1.lock().unwrap();
+                    let &(ref r_ngrants, ref cvar) = &*ngrants1;
                     let mut ngrants = r_ngrants.lock().unwrap();
 
                     if *state == false {
                         println!("{} ngrants val {}",pid,*ngrants);
-                        *ngrants -= 1;
-                         //cvar.notify_one();
-                         thx6.send(("Relinquish",0,pid,from)).unwrap();
-                    }
-                     
-                     
-                     tx6_1.send("complete");
-                }
-
-             });
-
-
-
-             /*
-                   Receive - Relinquish
-             */
-
-            let thx7 = mpsc::Sender::clone(&thx);
-            let (tx7,rx7) = mpsc::channel();
-            let granted_to_7 = Arc::clone(&granted_to);
-            let pending_req_7 = Arc::clone(&pending_req);
-            let preempting_now_7 = Arc::clone(&preempting_now);
-            let (tx7_1,rx7_1) = mpsc::channel();
-            let _relinq_recv_builder = thread::Builder::new().name("Relinquish".into());
-            let _relinq_recv = _relinq_recv_builder.spawn(move || {
-
-                fn delete_min( v: &mut Vec<(i32,usize)>)->(i32,usize){
-                    let mut index = 0;
-                    let mut min = (999999,999999);
-                    let mut i=0;
-                    for t in v.iter() {
-                        
-                        if t.0 < min.0 || (t.0 == min.0 && t.1 < min.1) {
-                            min.0 = t.0;
-                            min.1 = t.1;
-                            index = i;
+                        if *ngrants > 0 {
+                         *ngrants -= 1;
+                         
                         }
-                        i+=1;
+                        
+                        cvar.notify_one();
+                        thx1.send(("Relinquish",0,pid,from)).unwrap();
+                         
                     }
-                    v.remove(index);
-                    min
-                }
+                     
+                };
 
+            /*
+                Receive - Relinquish
+            */
 
-                for (_,from) in rx7 {
-                    let mut granted_to = granted_to_7.lock().unwrap();
-                    let mut pending_req = pending_req_7.lock().unwrap();
-                    let mut preempting_now = preempting_now_7.lock().unwrap();
+            let relinquish = |from:usize| {
 
-                   
+                    let mut granted_to = granted_to1.lock().unwrap();
+                    let mut pending_req = pending_req1.lock().unwrap();
+                    let mut preempting_now = preempting_now1.lock().unwrap();
+
                     *preempting_now = 0;
 
                     let mut i =0;
                     let mut j:(i32,usize) = (0,0);
 
                     for (_,t) in granted_to.iter() {
-                        println!("---->[{}]",from);
-                        println!("---->({})",t);
+                        
                         if *t == from {
                             let (tsj,pj) = granted_to.remove(i);
                             j.0 = tsj;
@@ -350,135 +249,150 @@ fn main() {
                         }
                         i+=1;
                     }
-                    //assert_ne!(j,(0,0));
+                   // assert_ne!(j,(0,0));
                     if j.0 != 0 && j.1 != 0 {
                             pending_req.push(j);
+                            
                     }
-                    
+                   // assert_ne!(pending_req.len(),0);
+                    if pending_req.len() > 0 {
                     let (tsh,ph) = delete_min(&mut pending_req);
                     granted_to.push((tsh,ph));
-                    thx7.send(("Grant",0,pid,ph)).unwrap();
-                    
-                    tx7_1.send("complete");
-                }
+                    thx1.send(("Grant",0,pid,ph)).unwrap();
+                    }
 
-             });
-
-            // let in_progress_m = Arc::clone(&in_progress);
-             let next_action_m = Arc::clone(&next_action);
-             let state_m = Arc::clone(&state);
-
-             thread::spawn( move || {
-                let mut rng = rand::thread_rng();
-                 while true {
-
-                        //println!("{} {}",pid,*(state_m.lock().unwrap()));
-                        //println!("{}",*(in_progress.lock().unwrap()) != false);
-                        //if *(in_progress_m.lock().unwrap()) == false {
-                                
-                                
-                              //  *(next_action_m.lock().unwrap()) = rng.gen_range(0, 2);
-
-                                //if *(next_action_m.lock().unwrap()) == 1 {
-
-                                    //*(in_progress_m.lock().unwrap()) = true;
-                                    
-                                    
-                                    if *(state_m.lock().unwrap()) == false {
-                                    
-                                        println!("Process {} wants to insert in CS", pid);
-                                        tx2.send("work").unwrap();
-                                        for msg in rx2_1.recv() {
-                                            break;
-                                        }
-                                        //thread::sleep(std::time::Duration::from_millis(1000));
-                                    }else {
-                                        
-                                        tx1.send("work").unwrap();
-                                        for msg in rx1_1.recv() {
-                                            break;
-                                        }
-                                      //  thread::sleep(std::time::Duration::from_millis(1000));
-                                    }      
-                          //  }
-                   // }
-
-                 }
-             });
+                };
 
 
-             //message handler
+
+            //message handler
              loop {
                  
-                    
                 match zx.try_recv() {
+
                     Ok((message,timestamp,from,_)) =>  {
                         
                         println!("Process {} received {} from process {}",pid,message,from);
                         
-
                         if message == "Request" {
-                            tx3.send((timestamp,from)).unwrap();
-                            for msg in rx3_1.recv() {
-                                if msg == "complete" {
-                                     println!("Process {} COMPLETE TASK {} from process {}",pid,message,from);
-                                    break;
-                                }
-                            }
+                            receive_req(timestamp,from);
                         }
                         else if message == "Grant" {
-                          
-                            tx4.send("Grant").unwrap();
-                            for msg in rx4_1.recv() {
-                                if msg == "complete" {
-                                    println!("Process {} COMPLETE TASK {} from process {}",pid,message,from);
-                                    break;
-                                }
-                            }
+                            grant();
                         }
                         else if message == "Release" {
-                            tx5.send((timestamp,from)).unwrap();
-                            for msg in rx5_1.recv() {
-                                if msg == "complete" {
-                                    println!("Process {} COMPLETE TASK {} from process {}",pid,message,from);
-                                    break;
-                                }
-                            }
+                            release(from);
                         }
                         else if message == "Preempt" {
-                            
-                            tx6.send((timestamp,from)).unwrap();
-                            for msg in rx6_1.recv() {
-                                if msg == "complete" {
-                                    println!("Process {} COMPLETE TASK {} from process {}",pid,message,from);
-                                    break;
-                                }
-                            }
+                            preempt(from);
                         }
                         else if message == "Relinquish" {
-                            tx7.send((timestamp,from)).unwrap();
-                            for msg in rx7_1.recv() {
-                                if msg == "complete" {
-                                    println!("Process {} COMPLETE TASK {} from process {}",pid,message,from);
-                                    break;
-                                }
-                            }
+                            relinquish(from);
                         }
+                        
+                        println!("Process {} COMPLETE TASK {} from process {}",pid,message,from);
                         
                     },
                     Err(_) => continue
                 }
 
-
-
              }
-            
-            
+
+             });
+
+
+             /* In this thread of this node,is executed the progress that wants (or not)/repeatly to insert(exit) to(from) CS*/
+             let state2 = Arc::clone(&state);
+             let ts2 = Arc::clone(&ts);
+             let ngrants2 = Arc::clone(&ngrants);
+
+             thread::spawn( move || {
+                
+                 let mut rng = rand::thread_rng();
+
+                 let exit_seq = || {
+
+                    *(ts2.lock().unwrap()) +=1; //increase timer
+                    
+                    let mut state = state2.lock().unwrap();
+                    
+                    *state = false;
+                    drop(state);
+                    println!("Process {} goes out of CS",pid);
+                    
+                    for i in 1..=n {
+                        
+                            thx.send(("Release",0,pid,i)).unwrap();
+                        
+                    }
+                    
+                };
+
+                let entry_seq = || {
+
+                    let &(ref r_ngrants, ref cvar) = &*ngrants2;
+
+                    let mut ngrants = r_ngrants.lock().unwrap();
+                    *ngrants = 0;
+
+                    for i in 1..=n {
+                        
+                            thx.send(("Request",*(ts.lock().unwrap()),pid,i)).unwrap();
+                    }
+
+                     while *ngrants < n {
+                         println!("Process {} waits" ,pid);
+                         ngrants = cvar.wait(ngrants).unwrap();
+                     }
+
+                     drop(ngrants);
+                     println!("Process {} stops wait" ,pid);
+                     let mut state = state.lock().unwrap();
+                     *state = true;
+                   
+                };
+              
+                 loop {
+                    let state = state2.lock().unwrap();
+                    let choice = rng.gen_range(0, 2000000);
+                    if *state == false && choice == 1 {
+                        drop(state);
+                        println!("Process {} wants to insert in CS", pid);
+                        let mut zupdate_cs = update_cs.lock().unwrap();
+                        zupdate_cs[pid-1] = [1.0,0.0,0.76,0.53];
+                        drop(zupdate_cs);
+
+                        entry_seq();
+                        println!("Process {} is in CS!",pid);
+                        /* Code for CS */
+                        let mut bupdate_cs = update_cs.lock().unwrap();
+                        bupdate_cs[pid-1] = [1.0,1.0,0.43,0.33];
+                        drop(bupdate_cs);
+                        thread::sleep(time::Duration::from_millis(400));
+                        
+                    }else if *state == true {
+                        drop(state);
+                        exit_seq();
+
+                        let mut rupdate_cs = update_cs.lock().unwrap();
+                        rupdate_cs[pid-1] = [1.0, 0.0, 0.0, 1.0];
+                        drop(rupdate_cs);
+                        thread::sleep(time::Duration::from_millis(200));
+                        
+                    }
+
+                   //thread::sleep(std::time::Duration::from_millis(1000));    
+                      
+                 }
+             });
+
              
         });
         
     }
 
+   //message repeater, to get rid of creating many channels (two channels for each Nodei - Nodej)
+   //this assumption does not change the correctness of the algorithm
    for received in rx {
        
         println!("Process {} sends {} to Process {} ", received.2, received.0, received.3);
