@@ -16,8 +16,8 @@ use piston_window::*;
 
 fn main() {
 
-    let n = 30; //Number of nodes
-    let m = 2; //How many nodes can be in their critical section
+    let n = 20; //Number of nodes
+    let m =2; //How many nodes can be in their critical section
     let (tx, rx) = mpsc::channel();
     let mut shout = Vec::with_capacity(n);
     let in_cs = Arc::new(Mutex::new(vec![[1.0, 0.0, 0.0, 1.0]; n])); // For GUI
@@ -26,12 +26,13 @@ fn main() {
     /* The thread below is for visualizing the state of the system */
     let graph_cs = in_cs.clone();
     thread::spawn (move || {
-
+        
         let mut window: PistonWindow =
-        WindowSettings::new("Hello World!", [512; 2])
+        WindowSettings::new("Distributed System", [512; 2])
             .build().unwrap();
 
         while let Some(e) = window.next() {
+            
         window.draw_2d(&e, |c, g| {
             let mut x = 0.0;
             let mut k = -110.0;
@@ -93,7 +94,7 @@ fn main() {
                  
                 fn delete_min( v: &mut Vec<(i32,usize)>)->(i32,usize){
                         let mut index = 0;
-                        let mut min = (999999,999999);
+                        let mut min = (99999999,99999999);
                         let mut i=0;
                         for t in v.iter() {
                             
@@ -114,7 +115,7 @@ fn main() {
 
                         for t in v.iter() {
                             
-                            if t.0 > max.0 || ((t.0 == max.0) && (t.1 < max.1)) {
+                            if t.0 > max.0 || ((t.0 == max.0) && (t.1 > max.1)) {
                                 max.0 = t.0;
                                 max.1 = t.1;
                             }
@@ -207,17 +208,17 @@ fn main() {
             let preempt = |from:usize| {
                    
                     let state = state1.lock().unwrap();
-                    let &(ref r_ngrants, ref cvar) = &*ngrants1;
+                    let &(ref r_ngrants, ref _cvar) = &*ngrants1;
                     let mut ngrants = r_ngrants.lock().unwrap();
 
                     if *state == false {
                         println!("{} ngrants val {}",pid,*ngrants);
-                        if *ngrants > 0 {
+                        //if *ngrants > 0 {
                          *ngrants -= 1;
                          
-                        }
+                        //}
                         
-                        cvar.notify_one();
+                        //cvar.notify_one();
                         thx1.send(("Relinquish",0,pid,from)).unwrap();
                          
                     }
@@ -303,7 +304,6 @@ fn main() {
 
              /* In this thread of this node,is executed the progress that wants (or not)/repeatly to insert(exit) to(from) CS*/
              let state2 = Arc::clone(&state);
-             let ts2 = Arc::clone(&ts);
              let ngrants2 = Arc::clone(&ngrants);
 
              thread::spawn( move || {
@@ -312,8 +312,7 @@ fn main() {
 
                  let exit_seq = || {
 
-                    *(ts2.lock().unwrap()) +=1; //increase timer
-                    
+                   
                     let mut state = state2.lock().unwrap();
                     
                     *state = false;
@@ -328,13 +327,19 @@ fn main() {
                     
                 };
 
+              
                 let entry_seq = || {
+
+                    let mut tss = ts.lock().unwrap();
+                    *(tss) +=1; //increase timer
+                    drop(tss);
 
                     let &(ref r_ngrants, ref cvar) = &*ngrants2;
 
+
                     let mut ngrants = r_ngrants.lock().unwrap();
                     *ngrants = 0;
-
+                   
                     for i in 1..=n {
                         
                             thx.send(("Request",*(ts.lock().unwrap()),pid,i)).unwrap();
@@ -349,35 +354,41 @@ fn main() {
                      println!("Process {} stops wait" ,pid);
                      let mut state = state.lock().unwrap();
                      *state = true;
+                     drop(state);
                    
                 };
               
                  loop {
                     let state = state2.lock().unwrap();
-                    let choice = rng.gen_range(0, 2000000);
+                    let choice = rng.gen_range(0, 100000);
                     if *state == false && choice == 1 {
                         drop(state);
                         println!("Process {} wants to insert in CS", pid);
                         let mut zupdate_cs = update_cs.lock().unwrap();
-                        zupdate_cs[pid-1] = [1.0,0.0,0.76,0.53];
+                        zupdate_cs[pid-1] = [0.65,0.5,0.76,0.53];
                         drop(zupdate_cs);
 
                         entry_seq();
                         println!("Process {} is in CS!",pid);
+                        thread::sleep(time::Duration::from_millis(100));
                         /* Code for CS */
                         let mut bupdate_cs = update_cs.lock().unwrap();
                         bupdate_cs[pid-1] = [1.0,1.0,0.43,0.33];
                         drop(bupdate_cs);
-                        thread::sleep(time::Duration::from_millis(400));
+                        thread::sleep(time::Duration::from_millis(100));
                         
                     }else if *state == true {
                         drop(state);
+
+                        
+
                         exit_seq();
 
                         let mut rupdate_cs = update_cs.lock().unwrap();
                         rupdate_cs[pid-1] = [1.0, 0.0, 0.0, 1.0];
                         drop(rupdate_cs);
-                        thread::sleep(time::Duration::from_millis(200));
+
+                        thread::sleep(time::Duration::from_millis(800));
                         
                     }
 
